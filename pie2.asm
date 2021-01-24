@@ -121,8 +121,9 @@
         leave
         ret
 
-
-
+; That's it! This was a simple introduction to a somewhat advanced topic was written by a rookie. There might be misstakes here and there
+; and I'm going to come back to improve it. You'll find articles onlines written by wizards, who will lead deeper into the rabbit hole.
+; This introduction will serve more as an inspiring and eye opening into a intresting topic.
 
 
 https://www.cs.swarthmore.edu/~kwebb/cs31/s15/bucs/virtual_memory_is.html
