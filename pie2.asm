@@ -84,8 +84,8 @@ main: push rbp
 ; address, the addresses in pie.o would be resolved according to the respective relocation entries. It's not though cause the linker I was using was
 ; configured with --enable-default-pie flag and due this expected an object file that could be linked into a position independent executable (pie). Pie 
 ; is based on relative addressing and can thus be loaded anywhere in the memory, above the 2 GiB limt if prefered. In short there's a conflict between
-; the linkers assumption about the code and the actual code. The code I wrote doesn't support pie. The error message mentions something about -fPIC, where
-; PIC stands for postion independent code. This is C/C++ compiler flag used for compiling the source code into a pic supporting object file. Pic appears to
+; the linkers assumption about the code and the actual code. The code I wrote doesn't support pie. The error message mentions something about -fPIC, which
+; stands for postion independent code. This is C/C++ compiler flag used for compiling the source code into a pic supporting object file. Pic appears to
 ; be used as generic term for exectuables which are based on relative addresses whereas pie is exlusivly used for executables that aren't libraries. The
 ; distinction is clearer in compiling C/C++ where -fPIE flag is used for non-libraries and -fPIC flag for libraries. I still don't know how to interpret 
 ; the "/usr/bin/ld: final link failed: Nonrepresentable section on output" in the error message.
@@ -98,7 +98,7 @@ main: push rbp
 ;
 ;    gcc -no-pie pie.o -o pie_ex
 ;
-;    If you now examine pie_ex you'll see that the addresses have been fixed
+;    If you now examine pie_ex you'll see that the addresses have both been fixed
 ;
 ;    objdump -d -Mintel pie_ex
 ;  
