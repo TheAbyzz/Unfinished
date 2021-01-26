@@ -88,7 +88,7 @@ main: push rbp
 ; PIC stands for postion independent code. This is C/C++ compiler flag used for compiling the source code into a pic supporting object file. Pic appears to
 ; be used as generic term for exectuables which are based on relative addresses whereas pie is exlusivly used for executables that aren't libraries. The
 ; distinction is clearer in compiling C/C++ where -fPIE flag is used for non-libraries and -fPIC flag for libraries. I still don't know how to interpret 
-: the "/usr/bin/ld: final link failed: Nonrepresentable section on output" in the error message.
+; the "/usr/bin/ld: final link failed: Nonrepresentable section on output" in the error message.
 ;
 ; SOLUTION
 ;
