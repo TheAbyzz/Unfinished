@@ -1,0 +1,892 @@
+  POSITION-INDEPENDENT EXECUTABLE (PIE)/POSITION-INDEPENDENT CODE (PIC) ON UBUNTU LINUX 5.8.0-44-generic X86_64
+  
+  16.3.2020
+  
+  TABLE OF CONTENTS
+  
+  INTRODUCTION
+  QUICK DESCRIPTION OF RELOCATION
+  WHAT IS PIC/PIE?
+  ROOT OF THE PROBLEM
+  SOLUTION
+
+  
+  INTRODUCTION
+
+  In this tutorial we'll be taking a look at position independent code also known as pic, an interesting feature, 
+  which is inherent in nearly all of the today's programs. I originally ran into this this feature while trying to 
+  link the assembled example.asm below the way I'd been taught. I thought it deserved some attention so I decied to 
+  write a tutorial about it. So without further ado, let's dig right into it!
+  
+  We're going to use the following assembly program as example
+
+  cat example.asm
+   -----------------------------------
+  | section .data                     |
+  | 	msg: db "Hello world!",0x0a,0 |      
+  |                                   |
+  | section .text                     |
+  |  	global main                   |
+  |	extern printf                 |
+  |                                   |
+  | main: push rbp                    |
+  |       mov  rbp, rsp               |
+  |       lea  rdi, [msg]             |
+  |       xor  rax, rax               |
+  |       call printf                 |
+  |                                   |
+  |       xor  rax, rax               |
+  |       leave                       |
+  |       ret                         |
+   -----------------------------------
+
+  I proceeded by entering the following command and was shortly faced with an error message
+ 
+  nasm -felf64 example.asm && gcc example.o -o example (we got this error message mostly likely with gcc-9.2.0 or gcc-9.1.0 (unlikely))
+   ----------------------------------------------------------------------------------------------------------------------------------------
+  | /usr/bin/ld: bill calculator.o: relocation R_X86_64_32S against `.data' can not be used when making a PIE object; recompile with -fPIC |
+  | /usr/bin/ld: final link failed: Nonrepresentable section on output                                                                     |
+  | collect2: error: ld returned 1 exit status                                                                                             |
+   ----------------------------------------------------------------------------------------------------------------------------------------
+ 
+  (update: The error message has changed a bit and looks on gcc-7.5.0 - 9.3.0 like this)
+   ----------------------------------------------------------------------------------------------------------------------------------------
+  | /usr/bin/ld: example.o: relocation R_X86_64_32S against `.data' can not be used when making a PIE object; recompile with -fPIE         |
+  | collect2: error: ld returned 1 exit status                                                                                             |
+   ----------------------------------------------------------------------------------------------------------------------------------------
+  
+  The earlier error message mentions something about relocation so let's start from that.
+ 
+  
+  QUICK DESCRIPTION OF RELOCATION
+ 
+  Relocation is a description for an address correction. It's an important piece of information which is processed
+  later on by the static linker or the the dynamic linker. It's required because the assembler simply doesn't know
+  the correct addresses. The assembler assembles each translation/compilation unit and the static linker puts the
+  object files together. The static linker takes care of undefined symbols that might be found in other object files. 
+  
+  
+  
+  
+  
+  It's required because the assembler doesn't consern
+  itself with matters such as the possible distribution of the source code into several files, the use of
+  libraries, the initialization code which is resposible for prepearing the environment the code holds 
+  assumptions of or the cleanup code. These are all matters among others that will determine which addresses 
+  are going to be used in the executable and they are left to the linker to be solved. The assemblers main task 
+  is to translate assembly into machine code. The linker on the other hand has no knowlegde of assembly nor
+  source code and therefore needs hints on where the the addresses that need to be fixed are located. This is
+  where relocations come into the picture. The assembler generates a relocation table which it injects into
+  the object file along with rest of code, data...
+  
+  The relocation table of example.o
+ 
+  readelf -r example.o
+   ----------------------------------------------------------------------------------
+  | Relocation section '.rela.text' at offset 0x340 contains 2 entries:              |
+  |   Offset          Info           Type           Sym. Value    Sym. Name + Addend |
+  | 000000000008  00020000000b R_X86_64_32S      0000000000000000 .data + 0          |   
+  | 000000000011  000500000009 R_X86_64_GOTPCREL 0000000000000000 printf - 4         |  
+   ----------------------------------------------------------------------------------
+ 
+  Offset = The offset the relocatable address in main, example.asm
+  
+  	If we turn over to the disassembled example.o, we see that both addresses specified in the
+  	relocation table are preset to zero (00 00 00 00).
+ 
+  	objdump -d -Mintel example.o
+  	 ----------------------------------------------------------------------------------
+  	|  example.o:     file format elf64-x86-64                                         |     
+  	|                                                                                  |
+  	|                                                                                  |
+  	| Disassembly of section .text:                                                    |
+  	|                                                                                  |
+  	| 0000000000000000 <main>:                                                         |
+  	|    0: 55                    push   rbp                                           |        
+  	|    1: 48 89 e5              mov    rbp,rsp                                       |
+  	|    4: 48 8d 3c 25 00 00 00  lea    rdi,ds:0x0                                    |
+  	|    b: 00                                                                         |
+  	|    c: 48 31 c0              xor    rax,rax                                       |
+  	|    f: ff 15 00 00 00 00     call   QWORD PTR [rip+0x0]        # 15 <main+0x15>   |
+  	|   15: 48 31 c0              xor    rax,rax                                       |
+  	|   18: c9                    leave                                                |
+  	|   19: c3                    ret                                                  | 
+   	 ----------------------------------------------------------------------------------
+  
+  Info = Index of symbol in the symbol table and architecture-dependent details, used for calculating the address 
+  Type = Type of the symbol? 
+  
+  	R_X86_64_32S
+ 
+  	This relocation type means take the value (00 00 00 00) at the offset (000000000008), add the Sym. Value
+  	to it, trunctate the result to a 32 bit value and finally check that that resulting value sign-extends to
+  	the original value (00 00 00 00 or the result?). The sign-extension is perhaps checked to verified that the
+  	program doesn't exceed the capability of 32 bit absoluted addressing. If the size of the code exceeds 2 GiB
+  	some addresses of data or functions may lie too far from where they are referenced (code model?). Memory model     (IS LEA INSTRUCTION RELATIVE OR ABSOLUTE???)
+  	and conanonical addresses?
+ 
+  	R_X86_64_GOTPCREL
+ 
+  	The calculation done by the R_X86_64_GOTPCREL relocation gives the difference between the location in the GOT 
+  	where the symbol's address is given and the location where the relocation is applied. The address of prinft
+  	in the got table is patched into main where printf is called. If we look at the disassembled example.o below 
+  	we see that the byte at offset f of main consists of ff. This is the opcode for the 32 bit relative jump, 
+  	which is used in the small code model (default), in code that's under 2 Gib in size.  
+  
+  Sym. Value = is equal to Sym. Name + Append and represent the current false address? 
+  Sym. Name + Addend = For printing purposes.
+ 
+  	Symbol table of example.o
+ 
+  	nm --debug-syms example.o
+  	 ----------------------------------------------------------------------------------
+  	| 0000000000000000 d .data                                                         |
+  	| 0000000000000000 a example.asm                                                   |
+  	| 0000000000000000 T main                                                          |
+  	| 0000000000000000 d msg                                                           |
+  	|                  U printf                                                        |
+  	| 0000000000000000 t .text                                                         |
+  	 ----------------------------------------------------------------------------------
+ 
+        d = The symbol is in the initialized data section. 
+        U = The symbol is undefined. 
+
+
+  WHAT IS PIC/PIE?
+  
+  Position-independent code as the name hints is code that's not required to be loaded at a predetermined load addresss. It was originally invented
+  with productivity in mind. Less time had to be spent on preventing programs with overlapping physical addresses from being loaded to memory at same 
+  time which in turn allowed programs to finnish their work quicker. The advent of mmu and virtual memory tossed pic into the dark but it didn't take 
+  long before it made itself back to the surface disguised as a shared library. 
+  
+  mmu and virtual memory did not emerge the same time
+  http://dictionary.sensagent.com/Position-independent%20code/en-en/#History
+  
+  
+  
+  Shared libraries are not linked to program prior
+  to program load up. Improved memory usage is the main advantage of the shared libraries compared to the static ones. A well know technique for shared 
+  libaries was called load-time-relocation. The disadvantage of it was that all the references to global data instances and functions had to be resolved 
+  during the load up of the program and this of course slowed things down a bit. The shared libaries were neither sharable and every program needed their 
+  own copy of the libary (why?). A tehnique called pic was suggested as a solution. Pic was faster because all the references to global data instances and 
+  functions went either through global offsets table (got) or procedure linkage table (plt). Only the address in got had to be resolved during load up of 
+  the program. Got and plt were accessed by adding an offset (wich was determined during the static linking process) to the address of instruction following 
+  the instruction that made the reference. On x86 (not x86_64) architectures the address of the following intstruction was obtained in a rather creative way 
+  by calling a function whose soley purpose was to load the return value (address of the following instruction) from stack to a register, usually rax and 
+  then return back to the calling function which added the offset which was determined earlier in the static linking process. Pic also allowed one single 
+  copy of the library to be shared by multiple programs (why?). Eventually the advantages of pic lead to the neglection of load-time relocation and pic made it 
+  to x86_64 and was actually improved along the way by the architecture. Now the rip (instruction register) could be accessed directly. Pic also cleared 
+  the way for somehting called address space randomization layout (asrl), which randomized the load address of shared libraries and thus made exploitation 
+  of vulnerabilities harder. It also became common practice to make the programs (non-library ones) themselves position-independent and they are nowdays 
+  called position-independent executables (pie). Pic appears to be used a generic for code where the tehnique is applied whereas pie is exlusively used 
+  for non-libraries. When making a shared library -fpic/-pic gcc compiler/linker flags are used whereas for executables -fpie/-pie are used. 
+  
+  
+  ROOT OF THE PROBLEM
+  
+  As I was writing example.asm for the first time I explicity told the assembler to request the static linker to patch a signed 32 bit absolute address into the 
+  lea instruction. This violated the linkers expectation of the code, because it was an still is configured with --enable-default-pie flag and thus expected a 
+  pic/pie supporting object file. In pic/pie addresses cannot be predetermined, secondly a signed 32 bit absolute address would stop the program from being loaded
+  beyond the 2 GiB boundary. The first error message suggests to recompile with -fPIC flag, which is a bit misleading since we're dealing with an executable.
+  I've added the updated error message below the first one. With this in mind let's move on to the solution.
+  
+  a library can be both an exectuable and a library or just a library
+  
+  thegreenplace how is data accessed from executbale
+  WHY DOESN'T LEA REFERENCE GO VIA GOT TABLE?
+  https://unix.stackexchange.com/questions/223385/why-and-how-are-some-shared-libraries-runnable-as-though-they-are-executables
+  
+  
+  SOLUTION
+ 
+  We've 2 options:
+  
+  1. Leave the code as it is and override the default behaviour of the linker to get a non-PIE
+  2. Make the necessary changes in example.asm to get a tasty pie
+ 
+  1. Leave the code as it is and override the default behaviour of the linker to get a non-PIE. (HOW IS FUNCTION PARAMETES ACCESSED IN SHARED LIBRARY FUNCTION) 
+                                                                                                 thegreenplace how is data accessed from executbale
+     nasm -felf64 example.asm
+     
+     objdump -d -Mintel example.o
+      --------------------------------------------------------
+     | 0000000000000000 <main>:                               |
+     |    0:   55                   	push   rbp            |
+     |    1:   48 89 e5             	mov    rbp,rsp        |
+     |    4:   48 8d 3c 25 00 00 00 	lea    rdi,ds:0x0     |
+     |    b:   00                                             |
+     |    c:   48 31 c0             	xor    rax,rax        |
+     |    f:   e8 00 00 00 00       	call   14 <main+0x14> |
+     |   14:   48 31 c0             	xor    rax,rax        |
+     |   17:   c9                   	leave                 |
+     |   18:   c3                   	ret                   |
+      -------------------------------------------------------- 
+     
+     At line 4 you can see a register called ds. It's the data segment register, which is used in
+     the segmented memory model. The offset 0x0 is added to the value of ds. We're using the flat 
+     memory model and hence it's preset to zero so lea instruction refers to address 0x0. Some
+     sources state that in non-pie the lea instruction should be replaced with mov when possible.  
+     
+     readelf -r example.o
+      ----------------------------------------------------------------------------------
+     | Relocation section '.rela.text' at offset 0x340 contains 2 entries:              |
+     |   Offset          Info           Type           Sym. Value    Sym. Name + Addend |
+     | 000000000008  00020000000b R_X86_64_32S      0000000000000000 .data + 0          |
+     | 000000000010  000500000002 R_X86_64_PC32     0000000000000000 printf - 4         |  
+      ----------------------------------------------------------------------------------
+     
+     Looking at the relocation table we see that 2 entries were created, one for the address
+     in the lea instruction and another one for the address in the call instruction. We'll
+     request the linker to load the exectuable at a predermined load address. The linker's
+     responsible of putting the executable together and therefore knows the offset of each
+     instruction. It's now able to patch a signed 32 bit address pointing to msg into the
+     lea instruction. The reference to printf is routed through plt and got.
+     
+     R_X86_64_PC32 (via plt and got)
+     
+     ...
+     
+     R_X86_64_GOTPCREL (via got)
+     R_X86_64_PLT32 (via plt)
+
+     gcc -no-pie example.o
+     
+     readelf -d a.out
+      --------------------------------------------------------------------------
+     | Dynamic section at offset 0x2e20 contains 24 entries:                  
+     |   Tag        Type                         Name/Value
+     | 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]      
+      --------------------------------------------------------------------------
+      
+     This entry tells the loader that the executable depends on libc.
+     
+     readelf -r a.out
+      --------------------------------------------------------------------------------------
+     | ...                                                                                  |
+     |                                                                                      |
+     | Relocation section '.rela.plt' at offset 0x420 contains 1 entry:                     |
+     |   Offset          Info           Type           Sym. Value    Sym. Name + Addend     |
+     | 000000404018  000100000007 R_X86_64_JUMP_SLO 0000000000000000 printf@GLIBC_2.2.5 + 0 |
+      --------------------------------------------------------------------------------------
+     
+     objdump -d -Mintel a.out
+      -------------------------------------------------------------------------------------------------------------
+     | ...                                                                                                         
+     |                                                                                                             
+     | 0000000000401030 <printf@plt>:                                                                              
+     |   401030:       ff 25 e2 2f 00 00    	jmp    QWORD PTR [rip+0x2fe2]        # 404018 <printf@GLIBC_2.2.5> 
+     |   401036:       68 00 00 00 00       	push   0x0                                                         
+     |   40103b:       e9 e0 ff ff ff       	jmp    401020 <.plt>                                               
+     |
+     | ...
+     | 
+     | 0000000000401130 <main>:
+     |   401130:	55                   	push   rbp
+     |   401131:	48 89 e5             	mov    rbp,rsp
+     |   401134:	48 8d 3c 25 30 40 40 	lea    rdi,ds:0x404030
+     |   40113b:	00 
+     |   40113c:	48 31 c0             	xor    rax,rax
+     |   40113f:	e8 ec fe ff ff       	call   401030 <printf@plt>
+     |   401144:	48 31 c0             	xor    rax,rax
+     |   401147:	c9                   	leave  
+     |   401148:	c3                   	ret    
+     |   401149:	0f 1f 80 00 00 00 00 	nop    DWORD PTR [rax+0x0]
+     |
+     | ...
+     |
+     | 0000000000404000 <_GLOBAL_OFFSET_TABLE_>:
+     |   404000:	20 3e                	and    BYTE PTR [rsi],bh
+     |   404002:	40 00 00             	add    BYTE PTR [rax],al  
+     |         ...
+     |   404015:	00 00                	add    BYTE PTR [rax],al
+     |   404017:	00 36                	add    BYTE PTR [rsi],dh
+     |   404019:	10 40 00             	adc    BYTE PTR [rax+0x0],al
+     |   40401c:	00 00                	add    BYTE PTR [rax],al
+     |         ...
+     |
+     | ...
+      ---------------------------------------------------------------------------------------------------------------
+     
+     readelf -x .data a.out
+      -------------------------------------------------------------------
+     | Hex dump of section '.data':                                      |
+     |   0x00404020 00000000 00000000 00000000 00000000 ................ |
+     |   0x00404030 48656c6c 6f20776f 726c6421 0a00     Hello world!..   |
+      -------------------------------------------------------------------
+     
+     Looking at the 3 previous tables we see that the access of msg is pretty straighforward but the call instruction is a bit more 
+     interesting. The call instruction takes us first to a plt entry in the plt section and from there to got but nothing appears 
+     to be at address 0x404018. The relocation table tells the dynamic loader/linker to patch the mapped address of printf to 
+     address 0x404018. All references are routed via plt and got to printf and the addresses in got are resolved.  
+     
+     Why not make the addresses point directy to got? 
+     call [rel printf WRT ..got]
+     
+     file a.out
+      ---------------------------------------------------------
+     | a.out: ELF 64-bit LSB executable,                       |
+     | x86-64, version 1 (SYSV),                               |
+     | dynamically linked,                                     |
+     | interpreter /lib64/ld-linux-x86-64.so.2,                |
+     | BuildID[sha1]=33d80bdfdf782e7c15995f35950aa5fc1b0f05f7, |
+     | for GNU/Linux 3.2.0, not stripped                       |
+      --------------------------------------------------------- 
+     
+     If you now examine a.out you'll notice that the addresses have been fixed
+     (according to the earlier relocation table). What you'll also notice is that the 
+     opcode for call has changed from an absolute call (ff) to a relative call (e8)?. 
+     Yes the rip register in example.o is used for calculating the address but we end 
+     up with an absolute address. This was not possible on architecures before x64. I
+     guess 32 bit relative e8 is faster because it's prefered over 64 absolute ff. jump
+     instructions are used in the jump tables because we don't want to return back to
+     them.
+ 
+     objdump -d -Mintel a.out
+      --------------------------------------------------------------------------------
+     | 00000000004004f0 <main>:                                                       |
+     |   4004f0: 55                    push   rbp                                     |
+     |   4004f1: 48 89 e5              mov    rbp,rsp                                 |
+     |   4004f4: 48 8d 3c 25 30 10 60  lea    rdi,ds:0x601030                         |
+     |   4004fb: 00                                                                   |
+     |   4004fc: 48 31 c0              xor    rax,rax                                 |
+     |   4004ff: e8 ec fe ff ff        call   4003f0 <printf@plt>                     | (THIS LOOKS WEIRD TOO!!! WE SHOULD GET CALLQ WITH NON-PIE FLAG)
+     |   400504: 48 31 c0              xor    rax,rax                                 | (CHECK THE OUTPUT OF OBJDUMP AND SEE IF ITS AN ASSEMBLER/LINKER thing)
+     |   400507: c9                    leave                                          |
+     |   400508: c3                    ret                                            |
+     |   400509: 0f 1f 80 00 00 00 00  nop    DWORD PTR [rax+0x0]                     |
+      --------------------------------------------------------------------------------
+  
+ 2.  Make the necessary changes in example.asm to get a tasty pie
+ 
+     https://stac47.github.io/c/relocation/elf/tutorial/2018/03/01/understanding-relocation-elf.html
+     the address in lea, call and jump is ins little endian byte order!
+
+     We've 2 solutions for the error presented in the earlier error message
+     
+     1. lea rdi, [msg] --> lea rdi, [rel msg] (32 bit absolute)
+     2. lea rdi, [msg] --> mov rdi, qword msg (64 bit absolute)
+
+     1. 32 bit absolute addressing
+        	
+        lea rdi, [msg] --> lea rdi, [rel msg]
+        
+        nasm -felf64 example.asm
+        objdump -d -Mintel example.o
+         -----------------------------------------------------------------
+        | ...
+        | 0000000000000000 <main>:
+        | ...
+        |    4:   48 8d 3d 00 00 00 00   lea    rdi,[rip+0x0]        # b <main+0xb>
+        | ...
+         --------------------------------------------------------------------------
+        
+        gcc example.o
+        objdump -D -Mintel a.out
+        --------------------------------------------------------------------------
+        ...
+        0000000000001160 <main>:
+        ...
+           1164:	48 8d 3d c5 2e 00 00 	lea    rdi,[rip+0x2ec5]        # 4030 <msg>
+           116b:	48 31 c0             	xor    rax,rax
+        ...
+        --------------------------------------------------------------------------
+        
+        readelf -x .data a.out
+         ---------------------------------------------------------------------------
+        |
+        | Hex dump of section '.data':
+        |   0x00004020 00000000 00000000 28400000 00000000 ........(@......
+        |   0x00004030 48656c6c 6f20776f 726c6421 0a00     Hello world!..
+         ---------------------------------------------------------------------------
+
+     2. 64 bit absolute addressing
+
+        lea rdi, [msg] -> mov rdi, qword msg 
+
+        nasm -felf64 example.asm
+        ----------------------------------------------------------------------------
+        ...
+        0000000000000000 <main>:
+        ...
+           4:  	48 bf 00 00 00 00 00 	movabs rdi,0x0
+        ...
+        ----------------------------------------------------------------------------
+        
+        gcc example.o
+        objdump -D -Mintel a.out
+        -----------------------------------------------------------------------------
+        0000000000001160 <main>:
+        ...
+           1164:	48 bf 10 40 00 00 00 	movabs rdi,0x4010
+        ...
+        -----------------------------------------------------------------------------
+        
+        readelf -x .data a.out
+        -----------------------------------------------------------------------------
+        
+        Hex dump of section '.data':
+          0x00004000 00000000 00000000 08400000 00000000 .........@......
+          0x00004010 48656c6c 6f20776f 726c6421 0a00     Hello world!..
+        ----------------------------------------------------------------------------
+        
+        This fix is not recommended here!
+  
+           
+    Now if we give it a shot
+
+    nasm -felf64 example.asm && gcc example.o && ./a.out
+    
+    We get the following error message (we got this error message mostly likely with gcc-9.2.0 or gcc-9.1.0(unlikely))
+     ------------- ---------------------------------------------------------
+    | ./a.out: Symbol `printf' causes overflow in R_X86_64_PC32 relocation |  
+    | Segmentation fault (core dumped)                                     |
+     ----------------------------------------------------------------------
+
+    (update: The error message has changed a bit and looks like this on gcc-7.5.0 - 9.3.0)
+     ------------------------------------------------------------------------------------------------------------------------------------------------------
+    | /usr/bin/ld: example.o: relocation R_X86_64_PC32 against symbol `printf@@GLIBC_2.2.5' can not be used when making a PIE object; recompile with -fPIE |
+    | /usr/bin/ld: final link failed: bad value                                                                                                            |
+    | collect2: error: ld returned 1 exit status                                                                                                           |
+     ------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    Again we've 2 solutions for the this error
+    
+    1. call printf --> call [rel printf WRT ..got]
+    2. call printf --> call printf WRT ..plt
+
+    32 bit relative addressing?
+
+    1. call printf --> call [rel printf WRT ..got] 
+    
+       In this fix we call printf with respect to (WRT) got. Let's see what that means.
+       
+       nasm -felf64 example.asm
+       objdump -d -Mintel exmample.o
+        -------------------------------------------------------------------------------------------
+       | ...                                                                                       
+       | e:	 ff 15 00 00 00 00     	call   QWORD PTR [rip+0x0]        # 14 <main+0x14> 
+       | ...                                                                                       
+        -------------------------------------------------------------------------------------------
+        
+       readelf -r example.o
+        ------------------------------------------------------------------------------------
+       | 
+       | Relocation section '.rela.text' at offset 0x340 contains 2 entries:
+       |   Offset          Info           Type           Sym. Value    Sym. Name + Addend
+       | ...
+       | 000000000010  000500000009 R_X86_64_GOTPCREL 0000000000000000 printf - 4
+        -------------------------------------------------------------------------------------
+       
+       gcc example.o
+       objdump -D -Mintel a.out
+        ----------------------------------------------------------------------------------------------------------
+       | ...
+       | 0000000000001150 <main>:
+       | ...
+       |   115e:	       ff 15 74 2e 00 00    	call   QWORD PTR [rip+0x2e74]        # 3fd8 <printf@GLIBC_2.2.5>
+       | ...
+       | Disassembly of section .got:
+       |
+       | 0000000000003fb8 <_GLOBAL_OFFSET_TABLE_>:
+       |   3fb8:	f8                   	clc    
+       |   3fb9:	3d 00 00 00 00       	cmp    eax,0x0
+       |       ...
+       |
+       | Disassembly of section .data:
+       |
+       | 0000000000004000 <__data_start>:        
+       | ...
+        ------------------------------------------------------------------------------------------------------------
+
+       readelf -r a.out
+        -------------------------------------------------------------------------------------------------
+       | Relocation section '.rela.dyn' at offset 0x490 contains 9 entries:                              |
+       |   Offset          Info           Type           Sym. Value    Sym. Name + Addend                |
+       | ...                                                                                             |
+       | 000000003fd8  000200000006 R_X86_64_GLOB_DAT 0000000000000000 printf@GLIBC_2.2.5 + 0            |
+       | ...                                                                                             |
+        -------------------------------------------------------------------------------------------------
+       
+       From the disassembled a.out we see that printf call points to got but offset 3fd8 holds nothing
+       but zeros. Looking at the relocation table we see that a relocation entry (created by gcc linker)
+       points at offset 3fd8. That relocation entry tells the loader to patch an address that points
+       at a specific memory region in the process'address space. This region is mapped (again by the loader)
+       to the physical memory where libc resides.
+       
+       Let's do the same walkthrough with gdb
+       
+       nasm -felf65 -g -F dwarf example.asm && gcc example.o && gdb a.out
+       (gdb) set disassembly-flavor intel     
+       (gdb) set disassemble-next-line on     
+       (gdb) set disable-randomization off    
+       (gdb) break example.asm:14
+       Breakpoint 1 at 0x115e: file example.asm, line 14.
+       (gdb) run
+       Starting program: /home/palmer/Desktop/a.out 
+       [Thread debugging using libthread_db enabled]
+       Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+       Breakpoint 1, main () at example.asm:14
+       14	     call [printf WRT ..got]
+       => 0x0000564b70c2615e <main+14>:	ff 15 74 2e 00 00	call   QWORD PTR [rip+0x2e74]        # 0x564b70c28fd8
+       (gdb) x/2i $pc
+       => 0x564b70c2615e <main+14>:	call   QWORD PTR [rip+0x2e74]        # 0x564b70c28fd8
+          0x564b70c26164 <main+20>:	xor    rax,rax
+       (gdb) x/1g 0x564b70c28fd8
+       0x564b70c28fd8:	0x00007fe352304e10
+       (gdb) x/1i 0x00007fe352304e10
+          0x7fe352304e10 <__printf>:	endbr64
+       (gdb) info proc mappings
+       process 3358
+       Mapped address spaces:
+
+                 Start Addr           End Addr       Size     Offset objfile
+             ...
+             0x7fe3522c5000     0x7fe35243d000   0x178000    0x25000 /usr/lib/x86_64-linux-gnu/libc-2.31.so
+             ...
+       (gdb)
+       
+       Interestingly call opcode ff (absolute) is use instead of e8 (relative)?
+       
+    2. call printf --> call printf WRT ..plt
+    
+       Here we call printf with respect to plt in addition to got  
+       
+       nasm -felf64 example.asm                                          
+       objdump -d -Mintel example.o
+        ----------------------------------------------
+       | ...                                          |
+       | e8 00 00 00 00       	call   13 <main+0x13> |
+       | ...                                          |
+        ----------------------------------------------
+       
+       readelf -r example.o
+        ----------------------------------------------------------------------------------
+       |
+       | Relocation section '.rela.text' at offset 0x340 contains 2 entries:
+       |   Offset          Info           Type           Sym. Value    Sym. Name + Addend
+       | ..
+       | 00000000000f  000500000004 R_X86_64_PLT32    0000000000000000 printf - 4
+        ----------------------------------------------------------------------------------- 
+       
+       gcc -Wl,-z,lazy example.o
+       objdump -D -Mintel a.out
+        ------------------------------------------------------------------------------------------------------------------
+       | ...
+       | Disassembly of section .plt:
+       |
+       | 0000000000001020 <.plt>:
+       |     1020:	ff 35 9a 2f 00 00    	push   QWORD PTR [rip+0x2f9a]        # 3fc0 <_GLOBAL_OFFSET_TABLE_+0x8>
+       |     1026:	ff 25 9c 2f 00 00    	jmp    QWORD PTR [rip+0x2f9c]        # 3fc8 <_GLOBAL_OFFSET_TABLE_+0x10>
+       |     102c:	0f 1f 40 00          	nop    DWORD PTR [rax+0x0]
+       |
+       | 0000000000001030 <printf@plt>:
+       |     1030:	ff 25 9a 2f 00 00    	jmp    QWORD PTR [rip+0x2f9a]        # 3fd0 <printf@GLIBC_2.2.5>
+       |     1036:	68 00 00 00 00       	push   0x0
+       |     103b:	e9 e0 ff ff ff       	jmp    1020 <.plt>
+       | ...
+       | 0000000000001160 <main>:
+       |     116e:	e8 bd fe ff ff       	call   1030 <printf@plt>
+       | ...
+       | Disassembly of section .got:
+       |
+       | 0000000000003fb8 <_GLOBAL_OFFSET_TABLE_>:
+       |     3fb8:	c8 3d 00 00          	enter  0x3d,0x0
+       |	        ...
+       |     3fd0:	36 10 00             	adc    BYTE PTR ss:[rax],al
+       |	        ...
+       | ...
+        -----------------------------------------------------------------------------------------------------------------
+       
+       readelf -r a.out
+        ----------------------------------------------------------------------------------------------------------------
+       | ...
+       | Relocation section '.rela.plt' at offset 0x550 contains 1 entry:
+       |   Offset          Info           Type           Sym. Value    Sym. Name + Addend
+       | 000000003fd0  000200000007 R_X86_64_JUMP_SLO 0000000000000000 printf@GLIBC_2.2.5 + 0
+        -----------------------------------------------------------------------------------------------------------
+       
+       From the first relocation table we see that the static linker is requested to fix the address in the call instruction
+       to point at a specific entry (printf@plt) in the procedure linkage table (plt). Don't worry about the linker flags, we'll
+       get to them in a moment. From the disassembled a.out we see that the code calls first the printf@plt entry, which includes
+       some "stubb" code. After that it jumps to address 0x3fd0 in got. At 0x3fd0 we've the address 0x1036 (little endian byte order). 
+       Don't mind objdumps interpretation of the address. As we see we it jumps back to printf@plt where it pushes 0x0 (8 bytes) to 
+       stack. This 0x0 value is an index of a relocation entry in the .rela.plt section. As we see the .rela.plt section contains only 
+       one entry, which specifies the address 0x3fd0 in got. After the push it jumps to first entry in plt where a structure that definies 
+       is pushed to the stack. Then it calls the resolver, which resolves the address 0x1036 at address 0x3fd0 to point at a printf. The 
+       final address is mapped to the physical memory where libc and printf resides as we saw in the previous debugging session. When 
+       printf is called once again it jumps via plt and got directly to printf. This method is called lazy binding and it speeds up the 
+       startup of the program by resolving and mapping the addresses at the last moment when the function is called. The fact that got 
+       has to be left with write permissions to make the use of this method possible raises some security conserns. The decision of 
+       resolving and mapping the addresses and disabling the write permssion of got before running the program was made to be the 
+       default. So all the back and forth jumping, which goes by the name tramboline is done before running the program and not
+       at the last moment. To override this default behaviour additional linker flags you see above has to be supplied.
+
+       Let's see how this looks with gdb and for that for that end I added another printf call right after the first one.
+       
+       cat example.asm
+        -----------------------------------
+       | section .data                     |
+       |     msg: db "Hello world!",0x0a,0 |      
+       |                                   |
+       | section .text                     |
+       |     global main                   |
+       |     extern printf                 |
+       |                                   |
+       | main: push rbp                    |
+       |       mov  rbp, rsp               |
+       |       lea  rdi, [rel msg]         |
+       |       xor  rax, rax               |
+       |       call printf WRT ..plt       |
+       |       xor  rax, rax               |
+       |       lea  rdi, [rel msg]         |
+       |       call printf WRT ..plt       |
+       |                                   |
+       |       xor  rax, rax               |
+       |       leave                       |
+       |       ret                         |
+        -----------------------------------
+        
+       nasm -felf64 -g -F dwarf example.asm && gcc -Wl,-z,lazy example.o && gdb a.out
+       (gdb) set disassembly-flavor intel     
+       (gdb) set disassemble-next-line on     
+       (gdb) set disable-randomization off 
+       (gdb) break example.asm:12
+       Breakpoint 1 at 0x116e: file example.asm, line 12.
+       (gdb) run
+       Starting program: /home/palmer/Desktop/a.out 
+       [Thread debugging using libthread_db enabled]
+       Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+       Breakpoint 1, main () at example.asm:12
+       12	     call printf WRT ..plt
+       => 0x00005627c2de316e <main+14>:        e8 bd fe ff ff	call   0x5627c2de3030 <printf@plt>
+       (gdb) x/2i $pc
+       => 0x5627c2de316e <main+14>:	call   0x5627c2de3030 <printf@plt>       
+       0x5627c2de3173 <main+19>:	xor    rax,rax
+       (gdb) x/3i 0x5627c2de3030     
+       0x5627c2de3030 <printf@plt>: jmp     QWORD PTR [rip+0x2fe2]    # 0x5627c2de6018 <printf@got.plt>
+       0x5627c2de3036 <printf@plt+6>:	     push   0x0
+       0x5627c2de303b <printf@plt+11>:	     jmp    0x5627c2de3020       
+       (gdb) x/1a 0x5627c2de6018
+       0x5627c2de6018 <printf@got.plt>:	0x5627c2de3036 <printf@plt+6>
+       (gdb) x/3i 0x5627c2de3020      
+       0x5648649de020:	push   QWORD PTR [rip+0x2fe2]        # 0x5648649e1008
+       0x5648649de026:	jmp    QWORD PTR [rip+0x2fe4]        # 0x5648649e1010
+       0x5648649de02c:	nop    DWORD PTR [rax+0x0]       
+       (gdb) break *0x5648649de026
+       Breakpoint 2 at 0x5648649de026
+       (gdb) c 
+       Continuing.
+       
+       Breakpoint 2, 0x5648649de026 in ?? ()
+       => 0x00005648649de026:  ff 25 e4 2f 00 00	jmp    QWORD PTR [rip+0x2fe4]        # 0x555555558010
+       (gdb) ni
+       0x00007ffff7fe7bb0 in ?? () from /lib64/ld-linux-x86-64.so.2
+       => 0x00007ffff7fe7bb0:	f3 0f 1e fa	endbr64 
+       (gdb) break example.asm:13
+       Breakpoint 3 at 0x555555555173: file example.asm, line 13.
+       (gdb) c
+       Continuing.
+       Hello world!
+
+       Breakpoint 3, main () at example.asm:13
+       13	     xor  rax, rax
+       => 0x0000555555555173 <main+19>:	48 8d 3d b6 2e 00 00	lea    rdi,[rip+0x2eb6]        # 0x555555558030 <msg>
+       (gdb)
+       
+       NOT THE MOST ELEGANT GDB SESSION!!
+       
+       Based on output of info proc mappings, it looks like the addresses are mapped to libc/libdl.so in advance
+       before calling the resolver from plt. Strange 
+       
+       finish = return (long long int)-1 = step out 
+       
+       In this final version I decided to go with the "call [rel printf WRT ..got]" because printf is going to
+       be called eitherway. As you already know the other version is slightly slower but it would'nt make
+       any difference here. I added also the "default rel" directive, which saves me from having to embed the
+       "rel" directive in every instruction where it's required.
+
+       cat example.asm
+        -----------------------------------
+       | section .data                     |
+       |     msg: db "Hello world!",0x0a,0 |      
+       |                                   |
+       | section .text                     |
+       |     global main                   |
+       |     extern printf                 |
+       |                                   |
+       | default rel                       |
+       |                                   |
+       | main: push rbp                    |
+       |       mov  rbp, rsp               |
+       |       lea  rdi, [msg]             |
+       |       xor  rax, rax               |
+       |       call [printf WRT ..got]     |
+       |                                   |
+       |       xor  rax, rax               |
+       |       leave                       |
+       |       ret                         |
+        -----------------------------------
+     
+       nasm -felf64 example.asm && gcc example.o 
+    
+       file a.out
+        ---------------------------------------------------------
+       | a.out: ELF 64-bit LSB shared object, x86-64,            |
+       | version 1 (SYSV),                                       |
+       | dynamically linked,                                     |
+       | interpreter /lib64/ld-linux-x86-64.so.2,                |
+       | BuildID[sha1]=2b5bb3de0bdc4c9df3883e3b788dd28aa8559381, | 
+       | for GNU/Linux 3.2.0, not stripped                       |
+        ---------------------------------------------------------
+       
+       ./a.out
+        ---------------------------------------------------------
+       | Hello World!                                            |               
+        ---------------------------------------------------------
+        
+        THE LAZY BINDING PROCESS, PUSHED VALUES AND STRUCTURES THE CALL FOR DYNAMIC LOADER/LINKER
+        FULL RELRO VS PARTIAL RELRO
+        PLT PLT.GOT GOT GOT.PLT
+
+
+        That's it! I hope you enjoyed it!
+        
+        
+        
+        In the next tutorial I might take a look at how to write
+        a shared library in nasm, dynamically loaded and linked libraries or how to install an older
+        version of gcc
+
+--------------------------------------------------------------------------------------------------------------------
+
+https://www.cs.swarthmore.edu/~kwebb/cs31/s15/bucs/virtual_memory_is.html
+https://www.bottomupcs.com/virtual_memory_is.xhtml
+http://reader.epubee.com/books/mobile/ee/ee571bde060c36770e1b10573760804f/text00107.html
+https://stackoverflow.com/questions/6093547/what-do-r-x86-64-32s-and-r-x86-64-64-relocation-mean
+https://stackoverflow.com/questions/2463150/what-is-the-fpie-option-for-position-independent-executables-in-gcc-and-ld/51308031#51308031
+https://www.quora.com/What-is-PC-relative-addressing
+
+https://stackoverflow.com/questions/10486116/what-does-this-gcc-error-relocation-truncated-to-fit-mean
+https://www.technovelty.org/c/relocation-truncated-to-fit-wtf.html
+https://stackoverflow.com/questions/33318342/when-is-it-better-for-an-assembler-to-use-sign-extended-relocation-like-r-x86-64
+
+which basically means "the value of the symbol pointed to by this relocation, plus any addend", in both cases. For R_X86_64_32S the linker then verifies that the generated value sign-extends to the original 64-bit value.
+https://stackoverflow.com/questions/6093547/what-do-r-x86-64-32s-and-r-x86-64-64-relocation-mean
+
+
+; We have 2 options to get the program above work
+;
+; 1. We could assemble and link the program above as non position independent executable
+;
+;    nasm -felf64 pie.asm && gcc -no-pie pie.o
+;
+; 2. We could make the necessary changes in the program above and assemble and link it as pie without -no-pie flag
+
+  section .data
+       msg: db "Hello world!",0x0a,0        
+ 
+  section .text
+       global main
+       extern printf
+ 
+  ; The "rel" keyword can be omitted if "default rel" is added here
+ 
+  main: push rbp
+        mov  rbp, rsp
+        lea  rdi, [rel msg] ; or mov rdi, qword msg (64 bit absolute addressing)
+        xor  rax, rax
+        call [rel printf WRT ..got] ; or call printf WRT ..plt
+ 
+        xor  rax, rax
+        leave
+        ret
+
+; The missing "rel" keyword in "lea rdi, [msg]" caused the earlier error meassage
+;
+; /usr/bin/ld: bill calculator.o: relocation R_X86_64_32S against `.data' can not be used when making a PIE object; recompile with -fPIC
+; /usr/bin/ld: final link failed: Nonrepresentable section on output
+; collect2: error: ld returned 1 exit status
+;
+; If we don't call printf as we do in the fixed version we'll get
+;
+; ./a.out: Symbol `printf' causes overflow in R_X86_64_PC32 relocation
+; Segmentation fault (core dumped)
+
+; -------------------------------------------------------------------------------------------------------------------------------------------
+
+; 64-bit code on OS X can't use 32-bit absolute addressing at all. Executables are loaded at a base address above 4GiB, so label addresses 
+; just plain don't fit in 32-bit integers, with zero- or sign-extension. RIP-relative addressing is the best / most efficient solution, 
+; whether you need it to be position-independent or not1.
+https://stackoverflow.com/questions/47300844/mach-o-64-bit-format-does-not-support-32-bit-absolute-addresses-nasm-accessing
+
+; 32-bit absolute relocation aren't allowed in an ELF shared object; that would stop them from being loaded outside the low 2GiB 
+; (for sign-extended 32-bit addresses). 64-bit absolute addresses are allowed, but generally you only want that for jump tables or other static 
+; data, not as part of instructions.1
+https://stackoverflow.com/questions/43367427/32-bit-absolute-addresses-no-longer-allowed-in-x86-64-linux/46493456
+
+; x86 code models
+https://eli.thegreenplace.net/2012/01/03/understanding-the-x64-code-models
+
+; relocations explained
+https://www.intezer.com/blog/elf/executable-and-linkable-format-101-part-3-relocations/
+
+; relative 32 bit jump is more efficient thant 64 absolute jump
+https://stackoverflow.com/questions/26955200/why-does-jmpq-of-x86-64-only-need-32-bit-length-address
+
+; with and without -fpic
+https://unix.stackexchange.com/questions/116327/loading-of-shared-libraries-and-ram-usage
+
+; plt and got
+https://www.technovelty.org/linux/plt-and-got-the-key-to-code-sharing-and-dynamic-libraries.html
+
+; The R_X86_64_32 and R_X86_64_32S relocations truncate the computed value to 32-bits. The linker must verify that the generated value for the 
+; R_X86_64_32 (R_X86_64_32S) relocation zero-extends (sign-extends) to the original 64-bit value. 
+
+; Most programs are compiled in a way that they use shared libraries. Those libraries are not part of the program image (even though it is 
+; possible to include them via static linking) and therefore have to be referenced (included) dynamically. As a result, we see the libraries 
+; (libc, ld, etc.) being loaded in the memory layout of a process. Roughly speaking, the shared libraries are loaded somewhere in the memory 
+; (outside of process’ control) and our program just creates virtual “links” to that memory region. This way we save memory without the need 
+; to load the same library in every instance of a program.
+
+; How does the shared library access externally the data from the calling process?
+
+
+Gdb tells Rdi register holds 0x601030 after lea instruction has been executed. 
+
+----------------------------------------------------------------------------------------
+quci revie of relocation 
+
+; it's usally done by the linker but in some cases it can be done by the
+; executable itself.  The relocation sections contains relocation types, which describe what kind of relocation is
+; required. If we examine the output below we see that 2 relocations are required to turn pie.o into an executable (pie_ex).
+; We'll take a closer look at the columns in the relaction table in a moment but notice how the 32 bit addresses of lea and 
+; printf call in pie.o that the relocation entries point at are both set to zero.
+
+----------------------------------------------------------------------------------------------------------------------------------
+https://eli.thegreenplace.net/2011/11/03/position-independent-code-pic-in-shared-libraries
+https://eli.thegreenplace.net/2011/08/25/load-time-relocation-of-shared-libraries/
+https://eli.thegreenplace.net/2012/01/03/understanding-the-x64-code-models
+https://eli.thegreenplace.net/2011/11/11/position-independent-code-pic-in-shared-libraries-on-x64
+https://stackoverflow.com/questions/43367427/32-bit-absolute-addresses-no-longer-allowed-in-x86-64-linux/46493456
+https://security.stackexchange.com/questions/168101/return-to-libc-finding-libcs-address-and-finding-offsets
+https://www.technovelty.org/category/c.html
+
+PLT VS GOT
+https://blog.fxiao.me/got-plt/
+https://systemoverlord.com/2017/03/19/got-and-plt-for-pwning.html
+https://ctf101.org/binary-exploitation/what-is-the-got/
+https://ctf101.org/binary-exploitation/relocation-read-only/
+https://ilivetoseek.wordpress.com/2011/10/24/how-gotplt-work/amp/
+https://www.technovelty.org/linux/plt-and-got-the-key-to-code-sharing-and-dynamic-libraries.html
+https://stackoverflow.com/questions/56404855/how-can-i-call-printf-normally-in-assembly-without-plt-but-just-call-printf-wit/56405510
+
+  https://reverseengineering.stackexchange.com/questions/16841/address-to-file-offset
+  https://stackoverflow.com/questions/2187484/why-is-the-elf-execution-entry-point-virtual-address-of-the-form-0x80xxxxx-and-n
+  https://stackoverflow.com/questions/38549972/why-elf-executables-have-a-fixed-load-address
+  https://stackoverflow.com/questions/1685483/how-can-i-examine-contents-of-a-data-section-of-an-elf-file-on-linux
+  https://stackoverflow.com/questions/18296276/base-address-of-elf
+  https://stackoverflow.com/questions/16847741/processing-elf-relocations-understanding-the-relocs-symbols-section-data-an
+
+  https://stackoverflow.com/questions/46123505/assembling-with-gcc-causes-weird-relocation-error-with-regards-to-data
