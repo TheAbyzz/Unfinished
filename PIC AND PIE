@@ -705,7 +705,8 @@
        In this final version I decided to go with the "call [rel printf WRT ..got]" because printf is going to
        be called eitherway. As you already know the other version is slightly slower but it would'nt make
        any difference here. I added also the "default rel" directive, which saves me from having to embed the
-       "rel" directive in every instruction where it's required.
+       "rel" directive in every instruction where it's required. Yes I know I could use "default rel" but I feel
+       that it makes me lazy.
 
        cat example.asm
         -----------------------------------
